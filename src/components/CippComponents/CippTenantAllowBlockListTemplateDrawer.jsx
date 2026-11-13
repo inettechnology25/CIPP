@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Button, Divider } from '@mui/material'
+import { CippIcons } from '../../utils/icon-registry'
+import { Button, Divider, Stack } from '@mui/material'
 import { Grid } from '@mui/system'
 import { useForm, useFormState, useWatch } from 'react-hook-form'
-import { SaveAlt } from '@mui/icons-material'
 import { CippOffCanvas } from './CippOffCanvas'
 import CippFormComponent from './CippFormComponent'
 import { CippApiResults } from './CippApiResults'
@@ -23,12 +23,40 @@ export const CippTenantAllowBlockListTemplateDrawer = ({
   buttonText = 'Add Template',
   requiredPermissions = [],
   PermissionButton = Button,
+  editData = null,
+  drawerVisible: controlledDrawerVisible,
+  setDrawerVisible: controlledSetDrawerVisible,
 }) => {
-  const [drawerVisible, setDrawerVisible] = useState(false)
+  const [internalDrawerVisible, internalSetDrawerVisible] = useState(false)
+  const drawerVisible =
+    controlledDrawerVisible !== undefined ? controlledDrawerVisible : internalDrawerVisible
+  const setDrawerVisible =
+    controlledSetDrawerVisible !== undefined ? controlledSetDrawerVisible : internalSetDrawerVisible
+
+  const isEditMode = !!editData
+
   const formControl = useForm({
     mode: 'onChange',
     defaultValues,
   })
+
+  useEffect(() => {
+    if (editData && drawerVisible) {
+      formControl.reset({
+        templateName: editData.templateName || '',
+        entries: Array.isArray(editData.entries)
+          ? editData.entries.join(', ')
+          : editData.entries || '',
+        notes: editData.notes || '',
+        listType: editData.listType ? { label: editData.listType, value: editData.listType } : null,
+        listMethod: editData.listMethod
+          ? { label: editData.listMethod, value: editData.listMethod }
+          : null,
+        NoExpiration: editData.NoExpiration || false,
+        RemoveAfter: editData.RemoveAfter || false,
+      })
+    }
+  }, [editData, drawerVisible, formControl])
 
   const { isValid } = useFormState({ control: formControl.control })
 
@@ -197,10 +225,18 @@ export const CippTenantAllowBlockListTemplateDrawer = ({
       RemoveAfter: values.RemoveAfter,
     }
 
-    saveTemplate.mutate({
-      url: '/api/AddTenantAllowBlockListTemplate',
-      data: payload,
-    })
+    if (isEditMode && editData?.GUID) {
+      payload.GUID = editData.GUID
+      saveTemplate.mutate({
+        url: '/api/EditTenantAllowBlockListTemplate',
+        data: payload,
+      })
+    } else {
+      saveTemplate.mutate({
+        url: '/api/AddTenantAllowBlockListTemplate',
+        data: payload,
+      })
+    }
   })
 
   const handleCloseDrawer = () => {
@@ -210,37 +246,50 @@ export const CippTenantAllowBlockListTemplateDrawer = ({
 
   return (
     <>
-      <PermissionButton
-        requiredPermissions={requiredPermissions}
-        onClick={() => setDrawerVisible(true)}
-        startIcon={<SaveAlt />}
-      >
-        {buttonText}
-      </PermissionButton>
+      {!isEditMode && controlledDrawerVisible === undefined && (
+        <PermissionButton
+          {...(PermissionButton !== Button ? { requiredPermissions } : {})}
+          onClick={() => setDrawerVisible(true)}
+          startIcon={<CippIcons.SaveAlt />}
+        >
+          {buttonText}
+        </PermissionButton>
+      )}
 
       <CippOffCanvas
-        title="Save Tenant Allow/Block List Template"
+        title={
+          isEditMode
+            ? 'Edit Tenant Allow/Block List Template'
+            : 'Save Tenant Allow/Block List Template'
+        }
         visible={drawerVisible}
         onClose={handleCloseDrawer}
         size="lg"
         footer={
-          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-start' }}>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleSubmit}
-              disabled={saveTemplate.isLoading || !isValid}
-            >
-              {saveTemplate.isLoading
-                ? 'Saving...'
-                : saveTemplate.isSuccess
-                  ? 'Save Another'
-                  : 'Save Template'}
-            </Button>
-            <Button variant="outlined" onClick={handleCloseDrawer}>
-              Close
-            </Button>
-          </div>
+          <Stack spacing={2}>
+            <CippApiResults apiObject={saveTemplate} />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-start' }}>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleSubmit}
+                disabled={saveTemplate.isPending || !isValid}
+              >
+                {saveTemplate.isPending
+                  ? 'Saving...'
+                  : saveTemplate.isSuccess
+                    ? isEditMode
+                      ? 'Saved'
+                      : 'Save Another'
+                    : isEditMode
+                      ? 'Update Template'
+                      : 'Save Template'}
+              </Button>
+              <Button variant="outlined" onClick={handleCloseDrawer}>
+                Close
+              </Button>
+            </div>
+          </Stack>
         }
       >
         <Grid container spacing={2}>
@@ -364,8 +413,6 @@ export const CippTenantAllowBlockListTemplateDrawer = ({
               }
             />
           </Grid>
-
-          <CippApiResults apiObject={saveTemplate} />
         </Grid>
       </CippOffCanvas>
     </>

@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useWatch } from 'react-hook-form'
+import { CippIcons } from '../../../../utils/icon-registry'
 import { useRouter } from 'next/router'
-import { Layout as DashboardLayout } from '../../../../layouts/index.js'
+import { Layout as DashboardLayout } from '../../../../layouts/index'
 import CippWizardPage from '../../../../components/CippWizard/CippWizardPage.jsx'
 import {
   Stack,
@@ -21,11 +23,18 @@ import { CippWizardStepButtons } from '../../../../components/CippWizard/CippWiz
 import { ApiPostCall, ApiGetCall } from '../../../../api/ApiCall'
 import { CippApiResults } from '../../../../components/CippComponents/CippApiResults'
 import { CippDataTable } from '../../../../components/CippTable/CippDataTable'
+import { CippFormDomainSelector } from '../../../../components/CippComponents/CippFormDomainSelector'
 import { CippFormUserSelector } from '../../../../components/CippComponents/CippFormUserSelector'
-import { Delete } from '@mui/icons-material'
+import { useSettings } from '../../../../hooks/use-settings'
+import { isMultiTenant } from '../../../../utils/tenant-selection'
 
 // User properties that can be patched
 const PATCHABLE_PROPERTIES = [
+  {
+    property: 'businessPhones',
+    label: 'Business Phone',
+    type: 'string',
+  },
   {
     property: 'city',
     label: 'City',
@@ -52,6 +61,11 @@ const PATCHABLE_PROPERTIES = [
     type: 'string',
   },
   {
+    property: 'faxNumber',
+    label: 'Fax Number',
+    type: 'string',
+  },
+  {
     property: 'jobTitle',
     label: 'Job Title',
     type: 'string',
@@ -60,6 +74,11 @@ const PATCHABLE_PROPERTIES = [
     property: 'manager',
     label: 'Manager',
     type: 'userSelector',
+  },
+  {
+    property: 'mobilePhone',
+    label: 'Mobile Phone',
+    type: 'string',
   },
   {
     property: 'officeLocation',
@@ -106,15 +125,69 @@ const PATCHABLE_PROPERTIES = [
     label: 'Usage Location',
     type: 'string',
   },
+  {
+    property: 'userPrincipalName',
+    label: 'UPN Domain Suffix',
+    type: 'domainPicker',
+  },
 ]
 
 // Step 1: Display users to be updated
 const UsersDisplayStep = (props) => {
   const { onNextStep, onPreviousStep, formControl, currentStep, users, onUsersChange } = props
+  const settings = useSettings()
+  const usersToAdd = useWatch({ control: formControl.control, name: 'usersToAdd' })
+
+  const existingUserIds = useMemo(
+    () => new Set((users || []).map((user) => user.id).filter(Boolean)),
+    [users]
+  )
+
+  // Prefer the tenant already represented in the selection; otherwise the active tenant.
+  const tenantForAdd = useMemo(() => {
+    const fromUsers = [
+      ...new Set((users || []).map((user) => user.Tenant || user.tenantFilter).filter(Boolean)),
+    ]
+    if (fromUsers.length === 1) return fromUsers[0]
+    if (settings.currentTenant && !isMultiTenant(settings.currentTenant)) {
+      return settings.currentTenant
+    }
+    return null
+  }, [users, settings.currentTenant])
+
+  useEffect(() => {
+    if (!tenantForAdd) return
+    const currentTenantFilter = formControl.getValues('tenantFilter')
+    if (currentTenantFilter?.value !== tenantForAdd) {
+      formControl.setValue('tenantFilter', { value: tenantForAdd })
+    }
+  }, [tenantForAdd, formControl])
 
   const handleRemoveUser = (userToRemove) => {
     const updatedUsers = users.filter((user) => user.id !== userToRemove.id)
     onUsersChange(updatedUsers)
+  }
+
+  const handleAddUsers = () => {
+    const selected = Array.isArray(usersToAdd) ? usersToAdd : usersToAdd ? [usersToAdd] : []
+    if (!selected.length || !tenantForAdd) return
+
+    const newUsers = selected
+      .filter((option) => option?.value && !existingUserIds.has(option.value))
+      .map((option) => ({
+        id: option.value,
+        displayName: option.addedFields?.displayName || option.label,
+        userPrincipalName: option.addedFields?.userPrincipalName,
+        jobTitle: option.addedFields?.jobTitle,
+        department: option.addedFields?.department,
+        Tenant: tenantForAdd,
+        tenantFilter: tenantForAdd,
+      }))
+
+    if (newUsers.length) {
+      onUsersChange([...(users || []), ...newUsers])
+    }
+    formControl.setValue('usersToAdd', [])
   }
 
   // Clean user data without circular references
@@ -134,21 +207,70 @@ const UsersDisplayStep = (props) => {
   const rowActions = [
     {
       label: 'Remove from List',
-      icon: <Delete />,
+      icon: <CippIcons.Delete />,
       color: 'error',
       customFunction: (user) => handleRemoveUser(user),
       noConfirm: true,
     },
   ]
 
+  const canAddUsers = Boolean(tenantForAdd)
+  const hasUsersToAdd = Array.isArray(usersToAdd)
+    ? usersToAdd.length > 0
+    : Boolean(usersToAdd?.value)
+
   return (
     <Stack spacing={3}>
       <Stack spacing={1}>
         <Typography variant="h6">Users to be updated</Typography>
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           The following users will be updated with the properties you select in the next step. You
-          can remove users from this list if needed.
+          can remove users from this list or add more without returning to the Users page.
         </Typography>
+      </Stack>
+
+      <Stack spacing={1}>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          sx={{ alignItems: { sm: 'flex-start' } }}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <CippFormUserSelector
+              formControl={formControl}
+              name="usersToAdd"
+              label="Add users"
+              multiple={true}
+              disabled={!canAddUsers}
+              select="id,userPrincipalName,displayName,jobTitle,department"
+              addedField={{
+                id: 'id',
+                userPrincipalName: 'userPrincipalName',
+                displayName: 'displayName',
+                jobTitle: 'jobTitle',
+                department: 'department',
+              }}
+              dataFilter={(option) => !existingUserIds.has(option.value)}
+              showRefresh={true}
+            />
+          </Box>
+          <Button
+            variant="outlined"
+            onClick={handleAddUsers}
+            disabled={!canAddUsers || !hasUsersToAdd}
+            sx={{ flexShrink: 0, mt: { sm: 0.5 } }}
+          >
+            Add
+          </Button>
+        </Stack>
+        {!canAddUsers && (
+          <Alert severity="info">
+            Select a specific tenant in CIPP to add users from here, or go back to the Users page
+            with a tenant selected.
+          </Alert>
+        )}
       </Stack>
 
       {users && users.length > 0 ? (
@@ -168,8 +290,15 @@ const UsersDisplayStep = (props) => {
       ) : (
         <Card variant="outlined">
           <CardContent>
-            <Typography color="text.secondary" variant="body2" sx={{ textAlign: 'center', py: 2 }}>
-              No users selected. Please go back and select users from the main table.
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                textAlign: 'center',
+                py: 2
+              }}>
+              No users selected yet. Use the picker above to add users, or go back and select them
+              from the Users table.
             </Typography>
           </CardContent>
         </Card>
@@ -183,7 +312,7 @@ const UsersDisplayStep = (props) => {
         noNextButton={!users || users.length === 0}
       />
     </Stack>
-  )
+  );
 }
 
 // Step 2: Property selection and input
@@ -195,12 +324,15 @@ const PropertySelectionStep = (props) => {
   const tenantDomains =
     [...new Set(users?.map((user) => user.Tenant || user.tenantFilter).filter(Boolean))] || []
   const firstTenantDomain = tenantDomains[0]
+  const isSingleTenant = tenantDomains.length <= 1
   const hasManagerSelected = selectedProperties.includes('manager')
   const hasSponsorSelected = selectedProperties.includes('sponsor')
   const hasRelationshipSelected = hasManagerSelected || hasSponsorSelected
+  const hasUPNSelected = selectedProperties.includes('userPrincipalName')
+  const hasTenantScopedSelectorSelected = hasRelationshipSelected || hasUPNSelected
 
   useEffect(() => {
-    if (!hasRelationshipSelected || !firstTenantDomain) {
+    if (!hasTenantScopedSelectorSelected || !firstTenantDomain) {
       return
     }
 
@@ -208,7 +340,7 @@ const PropertySelectionStep = (props) => {
     if (currentTenantFilter?.value !== firstTenantDomain) {
       formControl.setValue('tenantFilter', { value: firstTenantDomain })
     }
-  }, [firstTenantDomain, formControl, hasRelationshipSelected])
+  }, [firstTenantDomain, formControl, hasTenantScopedSelectorSelected])
 
   // Fetch custom data mappings for all tenants
   const customDataMappings = ApiGetCall({
@@ -242,8 +374,13 @@ const PropertySelectionStep = (props) => {
 
   // Combine standard properties with custom data properties
   const allProperties = useMemo(() => {
-    return [...PATCHABLE_PROPERTIES, ...customDataProperties]
-  }, [customDataProperties])
+    return [
+      ...PATCHABLE_PROPERTIES.filter(
+        (property) => isSingleTenant || property.property !== 'userPrincipalName'
+      ),
+      ...customDataProperties,
+    ]
+  }, [customDataProperties, isSingleTenant])
 
   // Register form fields
   formControl.register('selectedProperties', { required: true })
@@ -290,6 +427,24 @@ const PropertySelectionStep = (props) => {
       )
     }
 
+    if (property?.type === 'domainPicker') {
+      return (
+        <Stack key={propertyName} spacing={2}>
+          <Alert severity="warning">
+            Changes the domain after @ only. Users will be logged out and must sign in with the new
+            UPN.
+          </Alert>
+          <CippFormDomainSelector
+            formControl={formControl}
+            name={`propertyValues.${propertyName}`}
+            label={property?.label || propertyName}
+            preselectDefaultDomain={false}
+            showRefresh={true}
+          />
+        </Stack>
+      )
+    }
+
     // Default to text input for string types with consistent styling
     return (
       <TextField
@@ -320,16 +475,29 @@ const PropertySelectionStep = (props) => {
     <Stack spacing={3}>
       <Stack spacing={1}>
         <Typography variant="h6">Select Properties to update</Typography>
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           Choose which user properties you want to modify and provide the new values.
           {customDataProperties.length > 0 && (
             <> Custom data fields are available based on your tenant's manual entry mappings.</>
           )}
         </Typography>
         {customDataMappings.isLoading && (
-          <Typography color="text.secondary" variant="body2" sx={{ fontStyle: 'italic' }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "text.secondary",
+              fontStyle: 'italic'
+            }}>
             Loading custom data mappings...
           </Typography>
+        )}
+        {!isSingleTenant && (
+          <Alert severity="info">
+            UPN domain suffix changes are only available when all selected users are from the same
+            tenant.
+          </Alert>
         )}
       </Stack>
 
@@ -420,28 +588,31 @@ const PropertySelectionStep = (props) => {
             label="Properties to update"
             placeholder="Select properties to update..."
             slotProps={{
+              ...params.slotProps,
+
               inputLabel: {
                 shrink: true,
                 sx: { transition: 'none' },
               },
+
               input: {
-                ...params.InputProps,
+                ...params.slotProps.input,
                 sx: {
                   transition: 'none',
                   '& .MuiOutlinedInput-notchedOutline': {
                     transition: 'none',
                   },
                 },
-              },
+              }
             }}
           />
         )}
-        renderTags={(value, getTagProps) =>
+        renderValue={(value, getItemProps) =>
           value
             .filter((option) => !option.isSelectAll)
             .map((option, index) => (
               <Chip
-                {...getTagProps({ index })}
+                {...getItemProps({ index })}
                 key={option.property}
                 label={option.label}
                 size="small"
@@ -474,7 +645,7 @@ const PropertySelectionStep = (props) => {
         formControl={formControl}
       />
     </Stack>
-  )
+  );
 }
 
 // Step 3: Confirmation
@@ -508,6 +679,23 @@ const ConfirmationStep = (props) => {
         if (propertyValue !== undefined && propertyValue !== '' && propertyValue !== null) {
           if (propName === 'manager' || propName === 'sponsor') {
             if (propertyValue?.value) userData[propName] = propertyValue.value
+            return
+          }
+
+          if (propName === 'businessPhones') {
+            userData[propName] = [propertyValue]
+            return
+          }
+
+          if (propName === 'userPrincipalName') {
+            const selectedDomain = propertyValue?.value || propertyValue?.label || propertyValue
+            const currentUPN = user.userPrincipalName || ''
+            const upnPrefix = currentUPN.includes('@') ? currentUPN.split('@')[0] : currentUPN
+
+            if (selectedDomain && upnPrefix) {
+              userData[propName] = `${upnPrefix}@${selectedDomain}`
+            }
+
             return
           }
 
@@ -559,7 +747,9 @@ const ConfirmationStep = (props) => {
     <Stack spacing={3}>
       <Stack spacing={1}>
         <Typography variant="h6">Confirm User Updates</Typography>
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           Review the users that will be updated with {selectedProperties.length} selected{' '}
           {selectedProperties.length === 1 ? 'property' : 'properties'}, then click Submit to apply
           the changes.
@@ -581,6 +771,9 @@ const ConfirmationStep = (props) => {
 
                 if (propName === 'manager' || propName === 'sponsor') {
                   displayValue = value?.label || value?.value || 'Not set'
+                } else if (propName === 'userPrincipalName') {
+                  const selectedDomain = value?.label || value?.value || value
+                  displayValue = selectedDomain ? `Change domain to: ${selectedDomain}` : 'Not set'
                 } else if (property?.type === 'boolean') {
                   displayValue = value ? 'Yes' : 'No'
                 }
@@ -593,11 +786,16 @@ const ConfirmationStep = (props) => {
                     >
                       {property?.label || propName}:
                     </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: "text.secondary",
+                        flex: 1
+                      }}>
                       {displayValue}
                     </Typography>
                   </Box>
-                )
+                );
               })}
             </Stack>
           </CardContent>
@@ -620,7 +818,13 @@ const ConfirmationStep = (props) => {
       ) : (
         <Card variant="outlined">
           <CardContent>
-            <Typography color="text.secondary" variant="body2" sx={{ textAlign: 'center', py: 2 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                textAlign: 'center',
+                py: 2
+              }}>
               No users to update. Please go back and select users.
             </Typography>
           </CardContent>
@@ -630,12 +834,13 @@ const ConfirmationStep = (props) => {
       <CippApiResults apiObject={patchUsersApi} />
 
       <Stack
-        alignItems="center"
         direction="row"
-        justifyContent="flex-end"
         spacing={2}
-        sx={{ mt: 3 }}
-      >
+        sx={{
+          alignItems: "center",
+          justifyContent: "flex-end",
+          mt: 3
+        }}>
         {currentStep > 0 && (
           <Button color="inherit" onClick={onPreviousStep} size="large" type="button">
             Back
@@ -657,7 +862,7 @@ const ConfirmationStep = (props) => {
         </Button>
       </Stack>
     </Stack>
-  )
+  );
 }
 
 const Page = () => {
